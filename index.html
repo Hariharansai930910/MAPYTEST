@@ -31,7 +31,7 @@ let userMarker, destinationPin, routingControl, pinGridLayer;
 
 const routeColors = ['#ff6b6b', '#6bc5ff', '#6bff95', '#ffc36b', '#d36bff', '#ff6bd6'];
 let colorIndex = 0;
-const pinSizeDegrees = 0.00001; // ~1cm
+const pinSizeDegrees = 0.00001; // ~1cm accuracy
 
 function getNextColor() {
   const color = routeColors[colorIndex % routeColors.length];
@@ -39,7 +39,7 @@ function getNextColor() {
   return color;
 }
 
-// Load tiles
+// Load map tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 22
 }).addTo(map);
@@ -61,16 +61,18 @@ navigator.geolocation.getCurrentPosition(pos => {
 });
 
 // Reverse Geocode
-function getAddress(lat, lng) {
+function getAddress(lat, lng, callback = null) {
   const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
   fetch(url)
     .then(res => res.json())
     .then(data => {
       const address = data.display_name || 'Address not found';
-      document.getElementById('info').innerHTML = `
+      const infoBox = document.getElementById('info');
+      infoBox.innerHTML = `
         <strong>🏁 Destination:</strong> ${address}<br>
         <strong>📍 Coords:</strong> ${lat.toFixed(5)}, ${lng.toFixed(5)}
       `;
+      if (callback) callback();
     });
 }
 
@@ -87,29 +89,41 @@ map.on('click', function (e) {
     }).addTo(map).bindPopup("Destination").openPopup();
   }
 
-  // Show address
-  getAddress(lat, lng);
+  // Reverse geocode + route callback
+  getAddress(lat, lng, () => {
+    // Clear previous route
+    if (routingControl) {
+      map.removeControl(routingControl);
+    }
 
-  // Clear previous route
-  if (routingControl) {
-    map.removeControl(routingControl);
-  }
-
-  // Draw route from user to destination
-  if (userMarker) {
-    routingControl = L.Routing.control({
-      waypoints: [
-        userMarker.getLatLng(),
-        L.latLng(lat, lng)
-      ],
-      lineOptions: {
-        styles: [{ color: getNextColor(), weight: 6, opacity: 0.9 }]
-      },
-      show: false,
-      createMarker: () => null,
-      addWaypoints: false
-    }).addTo(map);
-  }
+    // Draw route from user to destination
+    if (userMarker) {
+      routingControl = L.Routing.control({
+        waypoints: [
+          userMarker.getLatLng(),
+          L.latLng(lat, lng)
+        ],
+        lineOptions: {
+          styles: [{ color: getNextColor(), weight: 6, opacity: 0.9 }]
+        },
+        show: false,
+        createMarker: () => null,
+        addWaypoints: false,
+        router: L.Routing.osrmv1({
+          profile: 'foot',
+          serviceUrl: 'https://router.project-osrm.org/route/v1'
+        })
+      }).on('routesfound', function(e) {
+        const distance = e.routes[0].summary.totalDistance / 1000; // km
+        const time = e.routes[0].summary.totalTime / 60; // minutes
+        const infoBox = document.getElementById('info');
+        infoBox.innerHTML += `
+          <br><strong>📏 Distance:</strong> ${distance.toFixed(2)} km
+          <br><strong>⏱️ ETA:</strong> ${time.toFixed(1)} min
+        `;
+      }).addTo(map);
+    }
+  });
 });
 
 // Draw transparent 1cm pin grid
@@ -135,7 +149,7 @@ function drawPinGrid() {
   requestAnimationFrame(() => pinGridLayer.addTo(map));
 }
 
-// On map move, check zoom and redraw pin grid
+// On map move, check zoom and draw grid
 map.on('moveend', () => {
   if (map.getZoom() >= 19) {
     drawPinGrid();
